@@ -1,5 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { spawn } from "node:child_process";
+import { readFile, readdir, rm } from "node:fs/promises";
+import {
+  buildDownloadCommand,
+  recoveryFilename,
+  recoveryItemId,
+} from "../src/download-command.js";
 import {
   fitToTwoThree,
   parseUrls,
@@ -107,4 +115,101 @@ test("image validation accepts large dimensions but rejects HTML, animation and 
     height: 1,
   });
   assert.throws(() => inspectImage(webp.slice(0, 24).buffer));
+});
+
+test("download names bind duplicate originals by ID and do not contain paths or shell syntax", () => {
+  const item = {
+    id: "00000000-0000-4000-8000-000000000001",
+    name: "../../한글'`$()*.webp",
+  };
+  const name = recoveryFilename(item);
+  assert.equal(recoveryItemId(name), item.id);
+  assert.match(name, /^[a-zA-Z0-9._-]+$/);
+  assert.equal(recoveryItemId("ordinary.webp"), undefined);
+  assert.throws(() =>
+    buildDownloadCommand([{ ...item, url: "file:///etc/passwd" }]),
+  );
+  assert.throws(() =>
+    buildDownloadCommand([
+      { ...item, url: "https://user:pass@example.com/a.png" },
+    ]),
+  );
+});
+
+test("generated command downloads a batch unchanged, quotes URLs, and cleans only failed partial files", async () => {
+  const received = [];
+  const bytes = await readFile(
+    new URL("./fixtures/pattern.webp", import.meta.url),
+  );
+  const server = createServer((req, res) => {
+    received.push(req.url);
+    res.writeHead(req.url.startsWith("/missing") ? 404 : 200, {
+      "Content-Type": "image/webp",
+    });
+    res.end(bytes);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const inputs = [
+    {
+      id: "00000000-0000-4000-8000-000000000001",
+      name: "photo.webp",
+      url: `${base}/one?q=[]&quote='&literal=$(printf%20UNSAFE)`,
+    },
+    {
+      id: "00000000-0000-4000-8000-000000000002",
+      name: "photo.webp",
+      url: `${base}/two`,
+    },
+    {
+      id: "00000000-0000-4000-8000-000000000003",
+      name: "bad.webp",
+      url: `${base}/missing`,
+    },
+  ];
+  let folder;
+  try {
+    const command = buildDownloadCommand(inputs);
+    const child = spawn("/bin/bash", ["-s"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "",
+      stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.stdin.end(command);
+    const code = await new Promise((resolve, reject) => {
+      child.on("close", resolve);
+      child.on("error", reject);
+    });
+    assert.equal(code, 1, stderr);
+    assert.match(stdout, /완료 2개 \/ 실패 1개/);
+    folder = stdout.match(/저장 위치: (.+)/)?.[1];
+    assert.match(folder, /\/Downloads\/2x3-originals\.[a-zA-Z0-9]+$/);
+    assert.deepEqual(
+      (await readdir(folder)).sort(),
+      inputs.slice(0, 2).map(recoveryFilename).sort(),
+    );
+    for (const item of inputs.slice(0, 2))
+      assert.deepEqual(
+        await readFile(`${folder}/${recoveryFilename(item)}`),
+        bytes,
+      );
+    assert.deepEqual(
+      received,
+      inputs.map((item) => {
+        const url = new URL(item.url);
+        return url.pathname + url.search;
+      }),
+    );
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    if (folder && /\/Downloads\/2x3-originals\.[a-zA-Z0-9]+$/.test(folder))
+      await rm(folder, { recursive: true });
+  }
 });

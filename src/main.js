@@ -1,5 +1,6 @@
 import "./style.css";
 import { zip } from "fflate";
+import { buildDownloadCommand, recoveryItemId } from "./download-command.js";
 import {
   inspectImage,
   parseUrls,
@@ -15,6 +16,8 @@ import {
 
 const $ = (id) => document.getElementById(id);
 const items = [];
+const unmatchedFiles = [];
+let galleryKey = "";
 let busy = false;
 let adding = false;
 let controller;
@@ -30,25 +33,12 @@ const labels = {
 const retryable = (item) => ["error", "needs-file"].includes(item.state);
 
 function originalLink(item, text) {
-  const link = element("a", "button button-small button-secondary", text);
+  const link = element("a", "original-fallback", text);
   link.href = item.url;
-  link.download = item.name;
   link.target = "_blank";
   link.rel = "noopener noreferrer";
   link.referrerPolicy = "no-referrer";
   return link;
-}
-
-function requestOriginalDownload(item) {
-  if (item.originalDownloadRequested) return;
-  item.originalDownloadRequested = true;
-  // Best effort only: cross-origin download attributes can be ignored, and
-  // asynchronous popups may be blocked. Never navigate away from the queue or
-  // infer that a download completed. The persistent link is the manual fallback.
-  const link = originalLink(item, "원본 다운로드");
-  document.body.append(link);
-  link.click();
-  link.remove();
 }
 
 function notice(message = "") {
@@ -76,6 +66,109 @@ function element(tag, className, text) {
   if (text !== undefined) el.textContent = text;
   return el;
 }
+
+function recoveryFeedback(message = "") {
+  $("recovery-feedback").textContent = message;
+  $("recovery-feedback").hidden = !message;
+}
+
+function renderRecovery(locked) {
+  const waiting = items.filter((item) => item.state === "needs-file");
+  $("recovery-panel").hidden = !waiting.length && !unmatchedFiles.length;
+  $("recovery-count").textContent = `${waiting.length}개 파일 연결 대기`;
+  $("recovery-upload").disabled = locked || !waiting.length;
+  $("recovery-file-input").disabled = locked || !waiting.length;
+  $("copy-download-command").disabled = locked || !waiting.length;
+  // Retain the image nodes while processing other items. No repeated requests
+  // or loss of the user's native context menu on every progress update.
+  const key = waiting
+    .map((item) => `${item.id}-${items.indexOf(item)}`)
+    .join(":");
+  if (galleryKey !== key) {
+    galleryKey = key;
+    $("download-command").value = waiting.length
+      ? buildDownloadCommand(waiting)
+      : "";
+    $("command-feedback").textContent = "";
+    const gallery = document.createDocumentFragment();
+    for (const item of waiting) {
+      const card = element("figure", "original-card");
+      card.id = `original-${item.id}`;
+      const img = element("img", "original-image");
+      img.alt = `${item.name} 원본 (저장용)`;
+      img.referrerPolicy = "no-referrer";
+      img.loading = "lazy";
+      // Intentionally no crossorigin: display the original from its server.
+      // The browser's Save Image action works without granting canvas access.
+      img.src = item.url;
+      const unavailable = element(
+        "p",
+        "original-unavailable",
+        "이 화면에서 원본을 표시할 수 없습니다. 원본 링크를 열어 확인해 주세요.",
+      );
+      unavailable.hidden = true;
+      img.addEventListener("error", () => {
+        img.hidden = true;
+        unavailable.hidden = false;
+      });
+      const caption = element("figcaption");
+      const name = element(
+        "span",
+        "original-name",
+        `${items.indexOf(item) + 1}. ${item.name}`,
+      );
+      name.title = item.name;
+      caption.append(
+        name,
+        element("span", "original-host", new URL(item.url).hostname),
+        originalLink(item, "원본 링크 열기 (새 탭) ↗"),
+      );
+      card.append(img, unavailable, caption);
+      gallery.append(card);
+    }
+    $("original-gallery").replaceChildren(gallery);
+  }
+  $("attachment-review").hidden = !unmatchedFiles.length;
+  const list = document.createDocumentFragment();
+  for (const entry of unmatchedFiles) {
+    if (!waiting.some((item) => item.id === entry.itemId)) entry.itemId = "";
+    const row = element("li", "attachment-row");
+    const name = element("span", "attachment-name", entry.file.name);
+    name.title = entry.file.name;
+    const select = element("select", "attachment-target");
+    select.setAttribute("aria-label", `${entry.file.name} 연결할 원본`);
+    select.disabled = locked;
+    select.append(new Option("연결할 원본 선택", ""));
+    for (const item of waiting)
+      select.append(
+        new Option(
+          `${items.indexOf(item) + 1}. ${item.name} — ${new URL(item.url).hostname}`,
+          item.id,
+        ),
+      );
+    select.value = entry.itemId;
+    select.addEventListener("change", () => {
+      entry.itemId = select.value;
+      $("apply-attachments").disabled = !unmatchedFiles.some(
+        (file) => file.itemId,
+      );
+    });
+    const remove = element("button", "icon-button", "×");
+    remove.type = "button";
+    remove.disabled = locked;
+    remove.setAttribute("aria-label", `${entry.file.name} 첨부 취소`);
+    remove.addEventListener("click", () => {
+      unmatchedFiles.splice(unmatchedFiles.indexOf(entry), 1);
+      render();
+    });
+    row.append(name, select, remove);
+    list.append(row);
+  }
+  $("attachment-list").replaceChildren(list);
+  $("apply-attachments").disabled =
+    locked || !unmatchedFiles.some((entry) => entry.itemId);
+}
+
 function render() {
   const locked = busy || adding;
   const ready = items.filter((item) => item.state === "done");
@@ -84,7 +177,9 @@ function render() {
   $("drop-zone").disabled = locked;
   $("url-input").disabled = locked;
   $("add-urls").disabled = locked || !$("url-input").value.trim();
-  $("clear-all").disabled = locked || (!items.length && !$("url-input").value);
+  $("clear-all").disabled =
+    locked ||
+    (!items.length && !unmatchedFiles.length && !$("url-input").value);
   $("convert").disabled =
     locked || (!pending.length && !$("url-input").value.trim());
   $("convert").hidden = busy;
@@ -100,6 +195,7 @@ function render() {
     ready.length > 1 ? `${ready.length}개 ZIP 다운로드 ↓` : "이미지 다운로드 ↓";
   $("retry").hidden = !items.some(retryable);
   $("retry").disabled = locked;
+  renderRecovery(locked);
   const list = document.createDocumentFragment();
   for (const item of items) {
     const row = element("li", "queue-item");
@@ -129,19 +225,20 @@ function render() {
       else meta += " · 무손실 저장";
     }
     body.append(element("span", "item-meta", meta));
-    if (item.error) body.append(element("p", "item-error", item.error));
+    if (item.error && item.state !== "needs-file")
+      body.append(element("p", "item-error", item.error));
     if (item.state === "needs-file") {
       const recovery = element("div", "file-recovery");
-      recovery.append(
-        element(
-          "p",
-          "recovery-instructions",
-          "원본 다운로드를 요청했습니다. 새 탭에 이미지가 열리면 ‘이미지를 다른 이름으로 저장’한 뒤 아래에서 첨부해 주세요. 아무 반응이 없으면 ‘원본 열기 · 저장’을 눌러주세요.",
-        ),
-      );
       const steps = element("div", "recovery-actions");
-      const original = originalLink(item, "1. 원본 열기 · 저장 ↗");
-      original.setAttribute("aria-label", `${item.name} 원본 열기 및 저장`);
+      const original = element(
+        "a",
+        "button button-small button-secondary",
+        "위 원본 모음에서 보기 ↑",
+      );
+      original.href = `#original-${item.id}`;
+      original.addEventListener("click", () => {
+        $("manual-save-help").open = true;
+      });
       const fileInput = element("input");
       fileInput.type = "file";
       fileInput.accept =
@@ -157,7 +254,7 @@ function render() {
       const upload = element(
         "button",
         "button button-small button-secondary",
-        "2. 저장한 파일 첨부",
+        "이 항목에 파일 연결",
       );
       upload.type = "button";
       upload.disabled = locked;
@@ -168,7 +265,7 @@ function render() {
         element(
           "span",
           "recovery-note",
-          "첨부하면 이 항목의 변환을 자동으로 이어갑니다. 다운로드 완료 여부는 확인할 수 없습니다.",
+          "여러 파일은 위에서 한 번에 첨부할 수 있어요.",
         ),
       );
       if (item.fileError)
@@ -207,7 +304,7 @@ async function validateFile(file) {
 }
 
 function attachFile(item, file) {
-  item.name = file.name;
+  if (recoveryItemId(file.name) !== item.id) item.name = file.name;
   item.source = file;
   item.key = `${file.name}:${file.size}:${file.lastModified}`;
   item.preview = URL.createObjectURL(file);
@@ -237,35 +334,43 @@ async function restoreFile(item, file) {
   if (restored) await convert(new Set([item.id]));
 }
 
-async function addFiles(files) {
+async function addFiles(files, { recoveryOnly = false } = {}) {
   if (busy || adding) return;
   adding = true;
   render();
   const errors = [];
   const restoredIds = new Set();
   let duplicates = 0;
+  recoveryFeedback();
   try {
     for (const file of files) {
       const key = `${file.name}:${file.size}:${file.lastModified}`;
-      if (items.some((item) => item.key === key)) {
+      if (
+        items.some((item) => item.key === key) ||
+        unmatchedFiles.some((entry) => entry.key === key)
+      ) {
         duplicates++;
         continue;
       }
-      const waiting = items.filter(
-        (item) => item.state === "needs-file" && item.name === file.name,
-      );
-      const replacement = waiting.length === 1 ? waiting[0] : undefined;
-      if (waiting.length > 1) {
-        errors.push(
-          `${file.name}: 같은 이름의 URL이 여러 개입니다. 해당 항목의 ‘저장한 파일 첨부’를 이용해 주세요.`,
-        );
-        continue;
+      const remaining = items.filter((item) => item.state === "needs-file");
+      const linkedId = recoveryItemId(file.name);
+      let waiting = linkedId
+        ? remaining.filter((item) => item.id === linkedId)
+        : remaining.filter((item) => item.name === file.name);
+      if (!waiting.length) {
+        // Browser duplicate-save suffixes, e.g. photo (1).webp. Exact matches
+        // take priority and ambiguous originals always require user selection.
+        const originalName = file.name.replace(/ \(\d+\)(?=\.[^.]+$)/, "");
+        waiting = remaining.filter((item) => item.name === originalName);
       }
+      const replacement = waiting.length === 1 ? waiting[0] : undefined;
       try {
         await validateFile(file);
         if (replacement) {
           attachFile(replacement, file);
           restoredIds.add(replacement.id);
+        } else if (recoveryOnly || waiting.length > 1) {
+          unmatchedFiles.push({ file, key, itemId: "" });
         } else
           items.push(
             newItem({
@@ -283,12 +388,49 @@ async function addFiles(files) {
     adding = false;
     if (duplicates)
       errors.push(`이미 목록에 있는 파일 ${duplicates}개는 제외했습니다.`);
-    notice(errors.join("\n"));
+    if (recoveryOnly) recoveryFeedback(errors.join("\n"));
+    else notice(errors.join("\n"));
     complete();
     invalidateBundle();
     render();
   }
   if (restoredIds.size) await convert(restoredIds);
+}
+
+async function applyAttachments() {
+  if (busy || adding) return;
+  const selected = unmatchedFiles.filter((entry) => entry.itemId);
+  const ids = new Set(selected.map((entry) => entry.itemId));
+  if (!selected.length) return;
+  if (ids.size !== selected.length) {
+    recoveryFeedback(
+      "같은 원본에 여러 파일을 연결할 수 없습니다. 연결할 원본을 각각 선택해 주세요.",
+    );
+    return;
+  }
+  if (
+    selected.some(
+      (entry) =>
+        !items.some(
+          (item) => item.id === entry.itemId && item.state === "needs-file",
+        ),
+    )
+  ) {
+    recoveryFeedback(
+      "대기 목록이 바뀌었습니다. 연결할 원본을 다시 선택해 주세요.",
+    );
+    render();
+    return;
+  }
+  for (const entry of selected) {
+    attachFile(
+      items.find((item) => item.id === entry.itemId),
+      entry.file,
+    );
+    unmatchedFiles.splice(unmatchedFiles.indexOf(entry), 1);
+  }
+  recoveryFeedback();
+  await convert(ids);
 }
 
 function addUrls() {
@@ -408,7 +550,6 @@ async function convert(onlyIds) {
           error.message || "변환 중 오류가 발생했습니다. 다시 시도해 주세요.";
         item.state =
           error instanceof RemoteImageAccessError ? "needs-file" : "error";
-        if (item.state === "needs-file") requestOriginalDownload(item);
       }
       $("progress").value = ++processed;
       render();
@@ -437,7 +578,7 @@ async function convert(onlyIds) {
       if (auto) downloadBundle();
     } else if (awaitingFiles) {
       complete(
-        `${awaitingFiles}개 이미지의 원본 다운로드를 요청했습니다. 저장한 파일을 해당 항목에 첨부하면 변환을 자동으로 이어갑니다. 이미지가 새 탭에 열리거나 다운로드가 차단되면 아래 안내를 따라 주세요.${failures ? ` 다른 ${failures}개 항목은 오류를 확인해 주세요.` : ""}`,
+        `${awaitingFiles}개는 파일 첨부가 필요합니다. 아래 일괄 다운로드 명령으로 원본을 받은 뒤 한 번에 첨부해 주세요.${failures ? ` 다른 ${failures}개 항목은 오류를 확인해 주세요.` : ""}`,
       );
     } else {
       complete("변환된 이미지가 없습니다. 각 항목의 안내를 확인해 주세요.");
@@ -459,6 +600,39 @@ $("file-input").addEventListener("change", (event) => {
   void addFiles([...event.target.files]);
   event.target.value = "";
 });
+$("recovery-upload").addEventListener("click", () =>
+  $("recovery-file-input").click(),
+);
+$("copy-download-command").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($("download-command").value);
+    $("command-feedback").textContent =
+      "복사했습니다. Mac 터미널에 붙여넣고 Enter를 누르세요.";
+  } catch {
+    $("command-details").open = true;
+    $("download-command").focus();
+    $("download-command").select();
+    $("command-feedback").textContent =
+      "자동 복사가 차단되었습니다. 선택된 명령을 ⌘C로 복사해 주세요.";
+  }
+});
+$("recovery-file-input").addEventListener("change", (event) => {
+  void addFiles([...event.target.files], { recoveryOnly: true });
+  event.target.value = "";
+});
+$("recovery-upload").addEventListener("dragover", (event) => {
+  event.preventDefault();
+  if (!busy && !adding) $("recovery-upload").classList.add("drag-over");
+});
+$("recovery-upload").addEventListener("dragleave", () =>
+  $("recovery-upload").classList.remove("drag-over"),
+);
+$("recovery-upload").addEventListener("drop", (event) => {
+  event.preventDefault();
+  $("recovery-upload").classList.remove("drag-over");
+  void addFiles([...event.dataTransfer.files], { recoveryOnly: true });
+});
+$("apply-attachments").addEventListener("click", () => void applyAttachments());
 let dragDepth = 0;
 $("drop-zone").addEventListener("dragenter", (event) => {
   event.preventDefault();
@@ -492,9 +666,11 @@ $("clear-all").addEventListener("click", () => {
   invalidateBundle();
   items.forEach(release);
   items.length = 0;
+  unmatchedFiles.length = 0;
   $("url-input").value = "";
   notice();
   complete();
+  recoveryFeedback();
   render();
 });
 $("download-all").addEventListener("click", async () => {

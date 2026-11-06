@@ -41,13 +41,11 @@ for (const [format, width, height, resultWidth, resultHeight] of [
       format === "webp"
         ? await readFile(fixture("large.webp"))
         : await solidImage(page, width, height, format);
-    await page
-      .locator("#file-input")
-      .setInputFiles({
-        name: `large.${format}`,
-        mimeType: `image/${format}`,
-        buffer: source,
-      });
+    await page.locator("#file-input").setInputFiles({
+      name: `large.${format}`,
+      mimeType: `image/${format}`,
+      buffer: source,
+    });
     await expect(page.locator("#item-count")).toHaveText("1");
     const saved = page.waitForEvent("download", { timeout: 110_000 });
     await page.locator("#convert").click();
@@ -122,13 +120,11 @@ test("WebP's actual format boundary is explained before allocating a huge output
 }) => {
   await page.goto("./");
   const source = await readFile(fixture("wide.webp"));
-  await page
-    .locator("#file-input")
-    .setInputFiles({
-      name: "wide.webp",
-      mimeType: "image/webp",
-      buffer: source,
-    });
+  await page.locator("#file-input").setInputFiles({
+    name: "wide.webp",
+    mimeType: "image/webp",
+    buffer: source,
+  });
   await expect(page.locator("#item-count")).toHaveText("1");
   await page.locator("#convert").click();
   await expect(page.locator('.queue-item[data-state="error"]')).toContainText(
@@ -236,7 +232,7 @@ test("multiple URLs, partial errors, safe retries and manual download work", asy
   await expect(
     page.locator('.queue-item[data-state="needs-file"]'),
   ).toHaveCount(1);
-  await expect(page.locator(".item-error")).toContainText("CORS");
+  await expect(page.locator("#recovery-panel")).toBeVisible();
   await expect(page.locator("#item-count")).toHaveText("3");
   await expect(page.locator("#download-all")).toBeEnabled();
   await page.unroute("https://images.example/**");
@@ -261,7 +257,7 @@ test("multiple URLs, partial errors, safe retries and manual download work", asy
   ]);
 });
 
-test("real cross-origin image without CORS opens for saving and attachment resumes the same item", async ({
+test("real cross-origin image displays inline without opening tabs, and attachment resumes the same item", async ({
   page,
   context,
 }) => {
@@ -286,16 +282,20 @@ test("real cross-origin image without CORS opens for saving and attachment resum
   try {
     await page.goto("./");
     await page.locator("#url-input").fill(url);
-    const opened = page.waitForEvent("popup");
+    let downloads = 0;
+    page.on("download", () => downloads++);
     await page.locator("#convert").click();
-    const original = await opened;
-    await original.waitForURL(url);
     const waiting = page.locator('.queue-item[data-state="needs-file"]');
     await expect(waiting).toHaveCount(1);
-    await expect(waiting).toContainText(
-      "다운로드 완료 여부는 확인할 수 없습니다",
-    );
-    expect(await original.evaluate(() => window.opener === null)).toBe(true);
+    await page.locator("#manual-save-help summary").click();
+    const inlineImage = page.locator("#original-gallery img");
+    await inlineImage.scrollIntoViewIfNeeded();
+    await expect
+      .poll(() => inlineImage.evaluate((img) => img.naturalWidth))
+      .toBeGreaterThan(0);
+    expect(await inlineImage.getAttribute("crossorigin")).toBeNull();
+    expect(context.pages()).toHaveLength(1);
+    expect(downloads).toBe(0);
     expect(page.url()).toContain("/2x3-image-converter/");
     await expect(page.locator("#download-all")).toBeHidden();
     expect(
@@ -304,9 +304,10 @@ test("real cross-origin image without CORS opens for saving and attachment resum
       ),
     ).toBe(true);
     expect(modes).toContain("cors");
-    expect(modes).toContain("navigate");
-    const originalLink = waiting.getByRole("link", {
-      name: /원본 열기 및 저장/,
+    expect(modes).toContain("no-cors");
+    expect(modes).not.toContain("navigate");
+    const originalLink = page.getByRole("link", {
+      name: /원본 링크 열기 \(새 탭\)/,
     });
     expect(await originalLink.getAttribute("href")).toBe(url);
     expect(await originalLink.getAttribute("rel")).toBe("noopener noreferrer");
@@ -338,17 +339,9 @@ test("real cross-origin image without CORS opens for saving and attachment resum
   }
 });
 
-test("normal upload reconnects one matching URL and blocked popups keep a working save link", async ({
+test("normal upload reconnects one matching URL and unavailable inline images have an explicit fallback", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    // Simulate a browser blocking automatic popup/download navigation.
-    const click = HTMLAnchorElement.prototype.click;
-    HTMLAnchorElement.prototype.click = function () {
-      if (this.target === "_blank") return;
-      click.call(this);
-    };
-  });
   await page.goto("./");
   await page.route("https://images.example/**", (route) =>
     route.abort("failed"),
@@ -359,10 +352,12 @@ test("normal upload reconnects one matching URL and blocked popups keep a workin
   await page.locator("#convert").click();
   const waiting = page.locator('.queue-item[data-state="needs-file"]');
   await expect(waiting).toHaveCount(1);
+  await page.locator("#manual-save-help summary").click();
   await expect(
-    waiting.getByRole("link", { name: /원본 열기 및 저장/ }),
+    page.getByRole("link", { name: /원본 링크 열기 \(새 탭\)/ }),
   ).toBeVisible();
-  await expect(waiting).toContainText("아무 반응이 없으면");
+  await page.locator(".original-card").scrollIntoViewIfNeeded();
+  await expect(page.locator(".original-unavailable")).toBeVisible();
   const downloaded = page.waitForEvent("download");
   await page.locator("#file-input").setInputFiles(fixture("already-2x3.jpeg"));
   const result = await downloaded;
@@ -371,6 +366,161 @@ test("normal upload reconnects one matching URL and blocked popups keep a workin
   );
   await expect(page.locator("#item-count")).toHaveText("1");
   await expect(page.locator('.queue-item[data-state="done"]')).toHaveCount(1);
+});
+
+test("multiple blocked URLs reconnect in one upload including browser-renamed files, without popups", async ({
+  page,
+  context,
+}) => {
+  await page.goto("./");
+  await page.route("https://images.example/**", (route) =>
+    route.abort("failed"),
+  );
+  await page
+    .locator("#url-input")
+    .fill(
+      "https://images.example/pattern.webp\nhttps://images.example/already-2x3.jpeg",
+    );
+  await page.locator("#convert").click();
+  await expect(
+    page.locator('.queue-item[data-state="needs-file"]'),
+  ).toHaveCount(2);
+  await expect(page.locator(".original-card")).toHaveCount(2);
+  expect(context.pages()).toHaveLength(1);
+  await page.setViewportSize({ width: 360, height: 800 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  const downloaded = page.waitForEvent("download");
+  await page.locator("#recovery-file-input").setInputFiles([
+    {
+      name: "pattern (1).webp",
+      mimeType: "image/webp",
+      buffer: await readFile(fixture("pattern.webp")),
+    },
+    {
+      name: "already-2x3.jpeg",
+      mimeType: "image/jpeg",
+      buffer: await readFile(fixture("already-2x3.jpeg")),
+    },
+  ]);
+  const result = await downloaded;
+  expect(result.suggestedFilename()).toBe("images-2x3.zip");
+  const files = unzipSync(await readFile(await result.path()));
+  expect(Object.keys(files).sort()).toEqual([
+    "already-2x3_2x3.jpeg",
+    "pattern (1)_2x3.webp",
+  ]);
+  expect(Buffer.from(files["already-2x3_2x3.jpeg"])).toEqual(
+    await readFile(fixture("already-2x3.jpeg")),
+  );
+  await expect(page.locator("#item-count")).toHaveText("2");
+  await expect(page.locator('.queue-item[data-state="done"]')).toHaveCount(2);
+  await expect(page.locator("#recovery-panel")).toBeHidden();
+  expect(context.pages()).toHaveLength(1);
+});
+
+test("ambiguous and renamed attachments stay for explicit batch mapping instead of guessing", async ({
+  page,
+}) => {
+  await page.goto("./");
+  await page.route("https://images.example/**", (route) =>
+    route.abort("failed"),
+  );
+  await page
+    .locator("#url-input")
+    .fill(
+      "https://images.example/first/photo.webp\nhttps://images.example/second/photo.webp",
+    );
+  await page.locator("#convert").click();
+  await expect(
+    page.locator('.queue-item[data-state="needs-file"]'),
+  ).toHaveCount(2);
+  const bytes = await readFile(fixture("pattern.webp"));
+  await page.locator("#recovery-file-input").setInputFiles([
+    { name: "photo.webp", mimeType: "image/webp", buffer: bytes },
+    { name: "renamed.webp", mimeType: "image/webp", buffer: bytes },
+  ]);
+  await expect(page.locator(".attachment-row")).toHaveCount(2);
+  await expect(page.locator("#item-count")).toHaveText("2");
+  const first = page.getByLabel("photo.webp 연결할 원본", { exact: true });
+  const second = page.getByLabel("renamed.webp 연결할 원본", { exact: true });
+  await first.selectOption({ index: 1 });
+  await second.selectOption({ index: 1 });
+  await page.locator("#apply-attachments").click();
+  await expect(page.locator("#recovery-feedback")).toContainText(
+    "같은 원본에 여러 파일",
+  );
+  await expect(
+    page.locator('.queue-item[data-state="needs-file"]'),
+  ).toHaveCount(2);
+  await second.selectOption({ index: 2 });
+  const downloaded = page.waitForEvent("download");
+  await page.locator("#apply-attachments").click();
+  const result = await downloaded;
+  expect(
+    Object.keys(unzipSync(await readFile(await result.path()))).sort(),
+  ).toEqual(["photo_2x3.webp", "renamed_2x3.webp"]);
+  await expect(page.locator('.queue-item[data-state="done"]')).toHaveCount(2);
+  await expect(page.locator("#recovery-panel")).toBeHidden();
+});
+
+test("batch command files reconnect duplicate filenames by ID and clipboard denial offers direct copy", async ({
+  page,
+  context,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        writeText: async () => {
+          throw new Error("blocked");
+        },
+      },
+    });
+  });
+  await page.goto("./");
+  await page.route("https://images.example/**", (route) =>
+    route.abort("failed"),
+  );
+  await page
+    .locator("#url-input")
+    .fill(
+      "https://images.example/one/photo.webp\nhttps://images.example/two/photo.webp",
+    );
+  await page.locator("#convert").click();
+  await expect(page.locator("#copy-download-command")).toBeEnabled();
+  await page.locator("#copy-download-command").click();
+  await expect(page.locator("#command-feedback")).toContainText(
+    "자동 복사가 차단",
+  );
+  await expect(page.locator("#download-command")).toBeVisible();
+  const command = await page.locator("#download-command").inputValue();
+  expect(command.match(/^download_one /gm)).toHaveLength(2);
+  const names = [
+    ...command.matchAll(/'((?:2x3-)[0-9a-f-]+--photo.webp)'/g),
+  ].map((match) => match[1]);
+  expect(new Set(names).size).toBe(2);
+  const downloaded = page.waitForEvent("download");
+  await page
+    .locator("#recovery-file-input")
+    .setInputFiles(
+      await Promise.all(
+        names.map(async (name) => ({
+          name,
+          mimeType: "image/webp",
+          buffer: await readFile(fixture("pattern.webp")),
+        })),
+      ),
+    );
+  const result = await downloaded;
+  expect(
+    Object.keys(unzipSync(await readFile(await result.path()))).sort(),
+  ).toEqual(["photo_2x3.webp", "photo_2x3_2.webp"]);
+  await expect(page.locator('.queue-item[data-state="done"]')).toHaveCount(2);
+  await expect(page.locator("#attachment-review")).toBeHidden();
+  expect(context.pages()).toHaveLength(1);
 });
 
 test("single JPEG keeps .jpg extension; duplicate names cannot overwrite ZIP entries", async ({
