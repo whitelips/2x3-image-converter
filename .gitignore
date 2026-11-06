@@ -145,5 +145,10 @@ vite.config.ts.timestamp-*
 # Astro generated types
 .astro/
 
+# Browser test artifacts
+test-results/
+playwright-report/
+.DS_Store
+
 # Turbo Repo
 .turbo

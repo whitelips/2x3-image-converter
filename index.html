@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f7f8f5" />
+    <meta
+      name="description"
+      content="이미지를 자르지 않고 검은 여백으로 2:3 비율을 맞춰 보세요. 여러 URL과 파일을 한 번에 변환하고 원본 형식으로 다운로드합니다."
+    />
+    <title>2:3 이미지 변환기 — 이미지 그대로, 비율만 맞게</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">변환 도구로 바로가기</a>
+    <header class="site-header shell">
+      <a class="brand" href="./" aria-label="2:3 이미지 변환기 홈"
+        ><span class="brand-mark">2:3</span><span>IMAGE FIT</span></a
+      >
+      <a
+        class="github-link"
+        href="https://github.com/whitelips/2x3-image-converter"
+        target="_blank"
+        rel="noopener noreferrer"
+        >GitHub <span aria-hidden="true">↗</span></a
+      >
+    </header>
+    <main class="shell">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span></span> 2:3 이미지 변환기</p>
+          <h1 id="hero-title">
+            이미지는 그대로.<br />비율만 <span>2:3.</span>
+          </h1>
+          <p class="hero-description">
+            자르거나 늘리지 않고, 검은 여백만 더해요.<br />여러 장도 한 번에,
+            원본 파일 형식 그대로.
+          </p>
+          <div class="feature-notes">
+            <span>원본 크기 유지</span><span>일괄 변환</span
+            ><span>브라우저에서 처리</span>
+          </div>
+        </div>
+        <div
+          class="ratio-demo"
+          role="img"
+          aria-label="가로 이미지 위아래에 검은 여백을 추가해 세로 2대3 이미지로 변환하는 예시"
+        >
+          <div class="demo-original">
+            <div class="demo-art"><i></i><b></b></div>
+            <span>원본</span>
+          </div>
+          <div class="demo-arrow" aria-hidden="true">⟶</div>
+          <div class="demo-result">
+            <div class="demo-art"><i></i><b></b></div>
+            <span class="ratio-label">2 : 3</span>
+          </div>
+          <span class="demo-caption">원본 크기는 그대로, 여백만 더하기</span>
+        </div>
+      </section>
+
+      <section
+        class="workspace"
+        id="workspace"
+        aria-labelledby="workspace-title"
+      >
+        <div class="section-heading">
+          <div>
+            <span class="step">01</span>
+            <h2 id="workspace-title">이미지 추가</h2>
+          </div>
+          <span class="limit-note">최대 50개 · 파일당 30 MB</span>
+        </div>
+        <div class="source-grid">
+          <div class="file-source">
+            <div class="source-label">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="3" />
+                <circle cx="8" cy="8" r="1.5" />
+                <path d="m3 17 5-5 4 4 4-5 5 6" />
+              </svg>
+              <h3>파일 첨부</h3>
+            </div>
+            <button
+              class="drop-zone"
+              id="drop-zone"
+              type="button"
+              aria-describedby="file-hint"
+            >
+              <span class="upload-icon"
+                ><svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M12 16V3m-5 5 5-5 5 5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"
+                  /></svg
+              ></span>
+              <strong>이미지를 여기에 놓아주세요</strong
+              ><span>또는 <em>파일 선택하기</em></span>
+              <small id="file-hint">WEBP · PNG · JPG · JPEG</small>
+            </button>
+            <input
+              id="file-input"
+              type="file"
+              accept="image/webp,image/png,image/jpeg,.webp,.png,.jpg,.jpeg"
+              multiple
+              hidden
+            />
+          </div>
+          <div class="url-source">
+            <div class="source-label">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="m10 13 4-4m-5 6-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 2 2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"
+                  transform="translate(1 0)"
+                />
+              </svg>
+              <h3><label for="url-input">이미지 URL</label></h3>
+              <span class="small-badge">여러 개 가능</span>
+            </div>
+            <textarea
+              id="url-input"
+              rows="5"
+              spellcheck="false"
+              placeholder="https://example.com/image-01.webp&#10;https://example.com/image-02.png&#10;&#10;이미지 주소를 한 줄에 하나씩 붙여넣으세요."
+              aria-describedby="url-hint"
+            ></textarea>
+            <div class="url-bottom">
+              <p id="url-hint">줄바꿈 또는 공백으로 주소를 구분해 주세요.</p>
+              <button
+                class="button button-small button-secondary"
+                id="add-urls"
+                type="button"
+              >
+                목록에 추가 <span aria-hidden="true">↗</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="privacy-note">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m12 3 8 3v6c0 4-8 9-8 9s-8-5-8-9V6l8-3Z" />
+            <path d="m8 12 3 3 5-6" /></svg
+          >첨부한 파일은 서버에 업로드하지 않습니다. URL 이미지는 해당 서버에서
+          직접 불러옵니다.
+        </div>
+        <div id="notice" class="notice" role="status" hidden></div>
+
+        <div class="action-bar">
+          <label class="auto-option"
+            ><input id="auto-download" type="checkbox" checked /><span
+              >완료 후 자동 다운로드<small
+                >여러 장은 ZIP 파일로 저장해요.</small
+              ></span
+            ></label
+          >
+          <div class="actions">
+            <button
+              class="button button-quiet"
+              id="clear-all"
+              type="button"
+              disabled
+            >
+              전체 비우기</button
+            ><button
+              class="button button-primary"
+              id="convert"
+              type="button"
+              disabled
+            >
+              <span id="convert-label">2:3으로 변환</span
+              ><span aria-hidden="true">→</span></button
+            ><button
+              class="button button-secondary"
+              id="cancel"
+              type="button"
+              hidden
+            >
+              중지
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="result-section" aria-labelledby="result-title">
+        <div class="section-heading">
+          <div>
+            <span class="step">02</span>
+            <h2 id="result-title">
+              변환 목록 <span id="item-count" class="count">0</span>
+            </h2>
+          </div>
+          <div class="result-actions">
+            <button id="retry" class="text-button" type="button" hidden>
+              실패 항목 다시 시도</button
+            ><button
+              id="download-all"
+              class="button button-small button-secondary"
+              type="button"
+              hidden
+            >
+              전체 다운로드
+            </button>
+          </div>
+        </div>
+        <div class="progress-area" id="progress-area" hidden>
+          <div>
+            <span id="progress-text"></span><span id="progress-count"></span>
+          </div>
+          <progress
+            id="progress"
+            max="1"
+            value="0"
+            aria-label="변환 진행률"
+          ></progress>
+        </div>
+        <div id="completion" class="completion" role="status" hidden></div>
+        <div id="empty-state" class="empty-state">
+          <span class="empty-frame" aria-hidden="true">2:3</span>
+          <p>변환할 이미지를 추가해 주세요.</p>
+          <span>파일과 URL을 함께 추가할 수 있어요.</span>
+        </div>
+        <ul id="queue" class="queue" aria-label="이미지별 변환 상태"></ul>
+      </section>
+
+      <details class="help">
+        <summary>
+          변환 방식과 지원 범위 알아보기 <span aria-hidden="true">+</span>
+        </summary>
+        <div class="help-grid">
+          <div>
+            <h3>원본 크기 그대로</h3>
+            <p>
+              이미지를 확대·축소하거나 자르지 않습니다. 중앙에 배치하고 검은
+              여백을 더해 정확히 2:3으로 맞춥니다. 이미 2:3이면 원본 파일을
+              그대로 저장합니다.
+            </p>
+          </div>
+          <div>
+            <h3>파일 형식 유지</h3>
+            <p>
+              WebP와 PNG는 무손실 인코딩, JPEG는 최고 품질로 저장합니다. JPEG
+              재압축에는 손실이 발생할 수 있습니다. 변환된 파일은 sRGB로
+              처리되며 투명 영역은 검은색으로 채워지고 EXIF 등 메타데이터는
+              보존하지 않습니다.
+            </p>
+          </div>
+          <div>
+            <h3>URL이 열리지 않나요?</h3>
+            <p>
+              이미지 주소를 직접 입력해 주세요. 로그인이나 외부 접근
+              허용(CORS)이 필요한 서버에서는 불러오지 못할 수 있습니다. 그럴
+              때는 이미지를 저장한 뒤 파일로 첨부해 주세요.
+            </p>
+          </div>
+          <div>
+            <h3>알아두세요</h3>
+            <p>
+              정지 WebP·PNG·JPEG를 지원합니다. 전체 원본 용량은 200 MB,
+              원본·결과는 각각 2,000만 픽셀 및 한 변 8,192px까지 지원합니다.
+              자동 저장이 차단되면 다운로드 버튼을 눌러주세요.
+            </p>
+          </div>
+        </div>
+      </details>
+    </main>
+    <footer class="shell">
+      <span>2:3 IMAGE FIT</span>
+      <p>당신의 이미지에, 딱 맞는 여백.</p>
+      <span
+        >Made by
+        <a
+          href="https://github.com/whitelips"
+          target="_blank"
+          rel="noopener noreferrer"
+          >whitelips</a
+        ></span
+      >
+    </footer>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
