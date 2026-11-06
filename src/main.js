@@ -1,6 +1,6 @@
 import "./style.css";
 import { zip } from "fflate";
-import { buildDownloadCommand, recoveryItemId } from "./download-command.js";
+import { recoveryItemId } from "./download-command.js";
 import {
   inspectImage,
   parseUrls,
@@ -78,7 +78,6 @@ function renderRecovery(locked) {
   $("recovery-count").textContent = `${waiting.length}개 파일 연결 대기`;
   $("recovery-upload").disabled = locked || !waiting.length;
   $("recovery-file-input").disabled = locked || !waiting.length;
-  $("copy-download-command").disabled = locked || !waiting.length;
   // Retain the image nodes while processing other items. No repeated requests
   // or loss of the user's native context menu on every progress update.
   const key = waiting
@@ -86,10 +85,6 @@ function renderRecovery(locked) {
     .join(":");
   if (galleryKey !== key) {
     galleryKey = key;
-    $("download-command").value = waiting.length
-      ? buildDownloadCommand(waiting)
-      : "";
-    $("command-feedback").textContent = "";
     const gallery = document.createDocumentFragment();
     for (const item of waiting) {
       const card = element("figure", "original-card");
@@ -225,7 +220,7 @@ function render() {
       else meta += " · 무손실 저장";
     }
     body.append(element("span", "item-meta", meta));
-    if (item.error && item.state !== "needs-file")
+    if (item.error)
       body.append(element("p", "item-error", item.error));
     if (item.state === "needs-file") {
       const recovery = element("div", "file-recovery");
@@ -578,7 +573,7 @@ async function convert(onlyIds) {
       if (auto) downloadBundle();
     } else if (awaitingFiles) {
       complete(
-        `${awaitingFiles}개는 파일 첨부가 필요합니다. 아래 일괄 다운로드 명령으로 원본을 받은 뒤 한 번에 첨부해 주세요.${failures ? ` 다른 ${failures}개 항목은 오류를 확인해 주세요.` : ""}`,
+        `${awaitingFiles}개는 파일 첨부가 필요합니다. 다시 시도하거나 원본 파일을 한 번에 첨부해 이어갈 수 있습니다.${failures ? ` 다른 ${failures}개 항목은 오류를 확인해 주세요.` : ""}`,
       );
     } else {
       complete("변환된 이미지가 없습니다. 각 항목의 안내를 확인해 주세요.");
@@ -603,19 +598,6 @@ $("file-input").addEventListener("change", (event) => {
 $("recovery-upload").addEventListener("click", () =>
   $("recovery-file-input").click(),
 );
-$("copy-download-command").addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText($("download-command").value);
-    $("command-feedback").textContent =
-      "복사했습니다. Mac 터미널에 붙여넣고 Enter를 누르세요.";
-  } catch {
-    $("command-details").open = true;
-    $("download-command").focus();
-    $("download-command").select();
-    $("command-feedback").textContent =
-      "자동 복사가 차단되었습니다. 선택된 명령을 ⌘C로 복사해 주세요.";
-  }
-});
 $("recovery-file-input").addEventListener("change", (event) => {
   void addFiles([...event.target.files], { recoveryOnly: true });
   event.target.value = "";

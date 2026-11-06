@@ -1170,28 +1170,10 @@ footer a {
   font-size: 13px;
   line-height: 1.9;
 }
-.batch-save-steps {
-  padding-left: 22px;
-  font-size: 13px;
-  color: #6f6a5d;
-}
-.batch-save-steps li {
-  margin-bottom: 8px;
-}
-.batch-save-steps strong {
-  color: #3d4b3b;
-}
-.command-feedback {
-  margin: 10px 0;
-  color: var(--green);
-  font-size: 12px;
-}
-.command-details,
 .manual-save-help {
   margin-top: 14px;
   font-size: 12px;
 }
-.command-details summary,
 .manual-save-help summary {
   cursor: pointer;
   color: #6f6a5d;
@@ -1199,20 +1181,6 @@ footer a {
 .manual-save-help {
   padding-top: 14px;
   border-top: 1px solid #e8e4d9;
-}
-#download-command {
-  display: block;
-  width: 100%;
-  margin-top: 10px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  font:
-    12px/1.6 ui-monospace,
-    monospace;
-  background: #fff;
-  color: #344032;
-  resize: vertical;
 }
 .original-gallery {
   display: grid;

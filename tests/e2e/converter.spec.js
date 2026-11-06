@@ -467,60 +467,94 @@ test("ambiguous and renamed attachments stay for explicit batch mapping instead 
   await expect(page.locator("#recovery-panel")).toBeHidden();
 });
 
-test("batch command files reconnect duplicate filenames by ID and clipboard denial offers direct copy", async ({
-  page,
-  context,
-}) => {
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, "clipboard", {
-      value: {
-        writeText: async () => {
-          throw new Error("blocked");
-        },
-      },
-    });
+const relay = "https://2x3-image-relay.whitelips19.workers.dev/";
+const cdn = "https://image.cdn.mnetplus.world";
+
+test("four CDN URLs use the private relay automatically and download one ZIP without popups", async ({ page, context }) => {
+  const bytes = await readFile(fixture("pattern.webp"));
+  const urls = ["one", "two", "three", "four"].map((name) => `${cdn}/images/${name}.jpg`);
+  const requests = [];
+  const direct = [];
+  page.on("request", (request) => {
+    if (request.url().startsWith(cdn)) direct.push(request.url());
+  });
+  await page.route(relay, async (route) => {
+    const request = route.request();
+    expect(request.method()).toBe("POST");
+    expect(request.headers()["content-type"]).toBe("application/json");
+    expect(request.headers()["cookie"]).toBeUndefined();
+    expect(request.headers()["referer"]).toBeUndefined();
+    requests.push(request.postDataJSON().url);
+    await route.fulfill({ status: 200, contentType: "image/webp", body: bytes });
   });
   await page.goto("./");
-  await page.route("https://images.example/**", (route) =>
-    route.abort("failed"),
-  );
-  await page
-    .locator("#url-input")
-    .fill(
-      "https://images.example/one/photo.webp\nhttps://images.example/two/photo.webp",
-    );
-  await page.locator("#convert").click();
-  await expect(page.locator("#copy-download-command")).toBeEnabled();
-  await page.locator("#copy-download-command").click();
-  await expect(page.locator("#command-feedback")).toContainText(
-    "자동 복사가 차단",
-  );
-  await expect(page.locator("#download-command")).toBeVisible();
-  const command = await page.locator("#download-command").inputValue();
-  expect(command.match(/^download_one /gm)).toHaveLength(2);
-  const names = [
-    ...command.matchAll(/'((?:2x3-)[0-9a-f-]+--photo.webp)'/g),
-  ].map((match) => match[1]);
-  expect(new Set(names).size).toBe(2);
+  await page.locator("#url-input").fill(urls.join("\n"));
   const downloaded = page.waitForEvent("download");
-  await page
-    .locator("#recovery-file-input")
-    .setInputFiles(
-      await Promise.all(
-        names.map(async (name) => ({
-          name,
-          mimeType: "image/webp",
-          buffer: await readFile(fixture("pattern.webp")),
-        })),
-      ),
-    );
+  await page.locator("#convert").click();
   const result = await downloaded;
-  expect(
-    Object.keys(unzipSync(await readFile(await result.path()))).sort(),
-  ).toEqual(["photo_2x3.webp", "photo_2x3_2.webp"]);
-  await expect(page.locator('.queue-item[data-state="done"]')).toHaveCount(2);
-  await expect(page.locator("#attachment-review")).toBeHidden();
+  expect(result.suggestedFilename()).toBe("images-2x3.zip");
+  const files = unzipSync(await readFile(await result.path()));
+  expect(Object.keys(files).sort()).toEqual(["four_2x3.webp", "one_2x3.webp", "three_2x3.webp", "two_2x3.webp"]);
+  expect(requests).toEqual(urls);
+  expect(direct).toEqual([]);
   expect(context.pages()).toHaveLength(1);
+  await expect(page.locator('.queue-item[data-state="done"]')).toHaveCount(4);
+  await expect(page.locator("#recovery-panel")).toBeHidden();
+  await expect(page.locator("#copy-download-command")).toHaveCount(0);
+  expect(Buffer.from(files["one_2x3.webp"]).subarray(0, 4).toString()).toBe("RIFF");
+});
+
+test("relay errors stay retryable while successful images finish, and unrelated URLs never reach the relay", async ({ page }) => {
+  const bytes = await readFile(fixture("pattern.png"));
+  let failed = true;
+  const received = [];
+  await page.route(relay, async (route) => {
+    const { url } = route.request().postDataJSON();
+    received.push(url);
+    const isFailure = failed && url.endsWith("missing.png");
+    await route.fulfill({
+      status: isFailure ? 502 : 200,
+      contentType: isFailure ? "application/json" : "image/png",
+      body: isFailure ? JSON.stringify({error:"upstream failed"}) : bytes,
+    });
+  });
+  await page.route("https://other.example/**", (route) => route.abort("failed"));
+  await page.goto("./");
+  await page.locator("#auto-download").uncheck();
+  await page.locator("#url-input").fill(`${cdn}/ok.png\n${cdn}/missing.png\nhttps://other.example/blocked.png`);
+  await page.locator("#convert").click();
+  await expect(page.locator('.queue-item[data-state="done"]')).toHaveCount(1);
+  await expect(page.locator('.queue-item[data-state="needs-file"]').filter({hasText:"중계 서버에서 원본 이미지를 받지 못했습니다"})).toHaveCount(1);
+  await expect(page.locator('.queue-item[data-state="needs-file"]')).toHaveCount(2);
+  expect(received).toEqual([`${cdn}/ok.png`, `${cdn}/missing.png`]);
+  failed = false;
+  await page.locator("#retry").click();
+  await expect(page.locator('.queue-item[data-state="done"]')).toHaveCount(2);
+  await expect(page.locator('.queue-item[data-state="needs-file"]')).toHaveCount(1);
+  expect(received).toEqual([`${cdn}/ok.png`, `${cdn}/missing.png`, `${cdn}/missing.png`]);
+});
+
+test("an undeployed relay explains its Hello World response without trying to convert it", async ({ page }) => {
+  await page.route(relay, (route) => route.fulfill({status: 200, contentType: "text/plain", body:"Hello World!"}));
+  await page.goto("./");
+  await page.locator("#url-input").fill(`${cdn}/photo.webp`);
+  await page.locator("#convert").click();
+  await expect(page.locator('.queue-item[data-state="error"]')).toContainText("중계 코드 배포 상태");
+  await expect(page.locator("#download-all")).toBeHidden();
+});
+
+test("an unavailable relay can recover the same URL item with a file attachment", async ({ page }) => {
+  await page.route(relay, (route) => route.abort("failed"));
+  await page.goto("./");
+  await page.locator("#url-input").fill(`${cdn}/pattern.webp`);
+  await page.locator("#convert").click();
+  await expect(page.locator('.queue-item[data-state="needs-file"]')).toContainText("중계 서버에 연결하지 못했습니다");
+  await expect(page.locator("#recovery-panel")).toBeVisible();
+  const downloaded = page.waitForEvent("download");
+  await page.locator("#recovery-file-input").setInputFiles(fixture("pattern.webp"));
+  expect((await downloaded).suggestedFilename()).toBe("pattern_2x3.webp");
+  await expect(page.locator("#item-count")).toHaveText("1");
+  await expect(page.locator('.queue-item[data-state="done"]')).toHaveCount(1);
 });
 
 test("single JPEG keeps .jpg extension; duplicate names cannot overwrite ZIP entries", async ({

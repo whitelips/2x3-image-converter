@@ -1,0 +1,14 @@
+{
+  "name": "2x3-image-relay",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-06",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false,
+    "logs": { "enabled": false, "invocation_logs": false },
+    "traces": { "enabled": false }
+  },
+  "cache": { "enabled": false },
+  "logpush": false
+}

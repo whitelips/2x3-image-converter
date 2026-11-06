@@ -1,42 +1,84 @@
 import { fitToTwoThree, inspectImage } from "./core.js";
 
+const RELAY_URL = "https://2x3-image-relay.whitelips19.workers.dev/";
+
+function relaySource(value) {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== "image.cdn.mnetplus.world" ||
+    url.port || url.username || url.password
+  ) return undefined;
+  // Fragments do not identify a different image on the source server.
+  url.hash = "";
+  return url.href;
+}
+
 export class RemoteImageAccessError extends Error {
-  constructor() {
-    super(
-      "서버의 외부 접근 제한(CORS) 또는 네트워크 문제로 이미지를 읽을 수 없습니다. 원본을 저장한 뒤 파일로 첨부해 주세요.",
-    );
+  constructor(message = "서버의 외부 접근 제한(CORS) 또는 네트워크 문제로 이미지를 읽을 수 없습니다. 원본을 저장한 뒤 파일로 첨부해 주세요.") {
+    super(message);
     this.name = "RemoteImageAccessError";
   }
 }
 
 export async function fetchImage(url, signal) {
+  const source = relaySource(url);
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) controller.abort();
   const timeout = setTimeout(abort, 30_000);
   try {
-    const response = await fetch(url, {
+    const response = await fetch(source ? RELAY_URL : url, {
       signal: controller.signal,
       credentials: "omit",
       referrerPolicy: "no-referrer",
       mode: "cors",
+      cache: "no-store",
+      ...(source ? {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: source }),
+      } : {}),
     });
-    if (!response.ok)
+    if (!response.ok) {
+      if (source) {
+        const messages = {
+          400: "이미지 주소를 확인해 주세요.",
+          403: "중계 서버가 요청을 허용하지 않았습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요.",
+          415: "이 주소는 지원하는 이미지 파일을 반환하지 않습니다. WebP, PNG, JPEG 이미지 주소를 입력해 주세요.",
+          429: "중계 서버의 사용량 한도에 도달했습니다. 잠시 후 다시 시도하거나 파일로 첨부해 주세요.",
+          502: "중계 서버에서 원본 이미지를 받지 못했습니다. 주소를 확인하거나 다시 시도해 주세요.",
+          504: "이미지 서버의 응답이 늦어지고 있습니다. 다시 시도하거나 파일로 첨부해 주세요.",
+        };
+        const AccessError = [403, 429, 502, 503, 504].includes(response.status)
+          ? RemoteImageAccessError : Error;
+        throw new AccessError(messages[response.status] ||
+          `중계 서버가 HTTP ${response.status} 오류를 반환했습니다. 다시 시도하거나 파일로 첨부해 주세요.`);
+      }
       throw new Error(
         `이미지 서버가 HTTP ${response.status} 오류를 반환했습니다.`,
       );
+    }
+    if (source && !/^image\/(webp|png|jpeg|jpg)(?:;|$)/i.test(response.headers.get("Content-Type") || ""))
+      throw new Error("중계 서버에서 이미지가 아닌 응답을 받았습니다. 중계 코드 배포 상태를 확인해 주세요.");
     // Only time out the initial response, not a large image's transfer.
     clearTimeout(timeout);
     return await response.blob();
   } catch (error) {
     if (signal.aborted) throw new DOMException("중지됨", "AbortError");
-    if (controller.signal.aborted)
-      throw new Error(
+    if (controller.signal.aborted) {
+      const AccessError = source ? RemoteImageAccessError : Error;
+      throw new AccessError(
         "이미지 서버가 30초 안에 응답하지 않았습니다. 파일로 첨부하거나 다시 시도해 주세요.",
       );
+    }
     // Browsers deliberately hide whether this is CORS or another network failure.
-    if (error instanceof TypeError) throw new RemoteImageAccessError();
+    if (error instanceof TypeError) {
+      if (source)
+        throw new RemoteImageAccessError("이미지 중계 서버에 연결하지 못했습니다. 잠시 후 다시 시도하거나 파일로 첨부해 주세요.");
+      throw new RemoteImageAccessError();
+    }
     throw error;
   } finally {
     clearTimeout(timeout);
