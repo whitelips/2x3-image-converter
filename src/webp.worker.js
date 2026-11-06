@@ -22,7 +22,7 @@ self.onmessage = async ({ data: { pixels, width, height } }) => {
   } catch {
     self.postMessage({
       error:
-        "WebP 무손실 변환에 실패했습니다. 파일 크기를 줄이거나 다시 시도해 주세요.",
+        "WebP 무손실 변환에 실패했습니다. 브라우저 또는 인코더의 메모리가 부족할 수 있습니다. 다른 데스크톱 브라우저에서 다시 시도해 주세요.",
     });
   }
 };

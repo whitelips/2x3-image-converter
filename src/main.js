@@ -1,16 +1,17 @@
 import "./style.css";
 import { zip } from "fflate";
 import {
-  MAX_FILES,
-  MAX_FILE_BYTES,
-  MAX_TOTAL_BYTES,
   inspectImage,
   parseUrls,
   nameFromUrl,
   outputName,
   formatBytes,
 } from "./core.js";
-import { convertImage, fetchImage } from "./converter.js";
+import {
+  convertImage,
+  fetchImage,
+  RemoteImageAccessError,
+} from "./converter.js";
 
 const $ = (id) => document.getElementById(id);
 const items = [];
@@ -23,7 +24,32 @@ const labels = {
   processing: "변환 중",
   done: "완료",
   error: "확인 필요",
+  "needs-file": "파일 첨부 필요",
 };
+
+const retryable = (item) => ["error", "needs-file"].includes(item.state);
+
+function originalLink(item, text) {
+  const link = element("a", "button button-small button-secondary", text);
+  link.href = item.url;
+  link.download = item.name;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.referrerPolicy = "no-referrer";
+  return link;
+}
+
+function requestOriginalDownload(item) {
+  if (item.originalDownloadRequested) return;
+  item.originalDownloadRequested = true;
+  // Best effort only: cross-origin download attributes can be ignored, and
+  // asynchronous popups may be blocked. Never navigate away from the queue or
+  // infer that a download completed. The persistent link is the manual fallback.
+  const link = originalLink(item, "원본 다운로드");
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
 
 function notice(message = "") {
   $("notice").textContent = message;
@@ -40,9 +66,6 @@ function invalidateBundle() {
 function release(item) {
   if (item.preview) URL.revokeObjectURL(item.preview);
   if (item.result?.url) URL.revokeObjectURL(item.result.url);
-}
-function sourceBytes() {
-  return items.reduce((sum, item) => sum + (item.source?.size || 0), 0);
 }
 function newItem(values) {
   return { id: crypto.randomUUID(), state: "queued", ...values };
@@ -75,7 +98,7 @@ function render() {
   $("download-all").disabled = locked;
   $("download-all").textContent =
     ready.length > 1 ? `${ready.length}개 ZIP 다운로드 ↓` : "이미지 다운로드 ↓";
-  $("retry").hidden = !items.some((item) => item.state === "error");
+  $("retry").hidden = !items.some(retryable);
   $("retry").disabled = locked;
   const list = document.createDocumentFragment();
   for (const item of items) {
@@ -107,6 +130,51 @@ function render() {
     }
     body.append(element("span", "item-meta", meta));
     if (item.error) body.append(element("p", "item-error", item.error));
+    if (item.state === "needs-file") {
+      const recovery = element("div", "file-recovery");
+      recovery.append(
+        element(
+          "p",
+          "recovery-instructions",
+          "원본 다운로드를 요청했습니다. 새 탭에 이미지가 열리면 ‘이미지를 다른 이름으로 저장’한 뒤 아래에서 첨부해 주세요. 아무 반응이 없으면 ‘원본 열기 · 저장’을 눌러주세요.",
+        ),
+      );
+      const steps = element("div", "recovery-actions");
+      const original = originalLink(item, "1. 원본 열기 · 저장 ↗");
+      original.setAttribute("aria-label", `${item.name} 원본 열기 및 저장`);
+      const fileInput = element("input");
+      fileInput.type = "file";
+      fileInput.accept =
+        "image/webp,image/png,image/jpeg,.webp,.png,.jpg,.jpeg";
+      fileInput.hidden = true;
+      fileInput.disabled = locked;
+      fileInput.setAttribute("aria-label", `${item.name} 저장한 파일 첨부`);
+      fileInput.addEventListener("change", (event) => {
+        const file = event.target.files[0];
+        if (file) void restoreFile(item, file);
+        event.target.value = "";
+      });
+      const upload = element(
+        "button",
+        "button button-small button-secondary",
+        "2. 저장한 파일 첨부",
+      );
+      upload.type = "button";
+      upload.disabled = locked;
+      upload.addEventListener("click", () => fileInput.click());
+      steps.append(original, upload, fileInput);
+      recovery.append(
+        steps,
+        element(
+          "span",
+          "recovery-note",
+          "첨부하면 이 항목의 변환을 자동으로 이어갑니다. 다운로드 완료 여부는 확인할 수 없습니다.",
+        ),
+      );
+      if (item.fileError)
+        recovery.append(element("p", "item-error", item.fileError));
+      body.append(recovery);
+    }
     const controls = element("div", "item-controls");
     controls.append(element("span", "item-status", labels[item.state]));
     if (item.result) {
@@ -134,11 +202,47 @@ function render() {
   $("queue").replaceChildren(list);
 }
 
+async function validateFile(file) {
+  inspectImage(await file.arrayBuffer());
+}
+
+function attachFile(item, file) {
+  item.name = file.name;
+  item.source = file;
+  item.key = `${file.name}:${file.size}:${file.lastModified}`;
+  item.preview = URL.createObjectURL(file);
+  item.error = "";
+  item.fileError = "";
+  item.state = "queued";
+}
+
+async function restoreFile(item, file) {
+  if (busy || adding || !items.includes(item) || item.state !== "needs-file")
+    return;
+  adding = true;
+  render();
+  let restored = false;
+  try {
+    await validateFile(file);
+    attachFile(item, file);
+    invalidateBundle();
+    complete();
+    restored = true;
+  } catch (error) {
+    item.fileError = error.message;
+  } finally {
+    adding = false;
+    render();
+  }
+  if (restored) await convert(new Set([item.id]));
+}
+
 async function addFiles(files) {
   if (busy || adding) return;
   adding = true;
   render();
   const errors = [];
+  const restoredIds = new Set();
   let duplicates = 0;
   try {
     for (const file of files) {
@@ -147,24 +251,30 @@ async function addFiles(files) {
         duplicates++;
         continue;
       }
-      if (items.length >= MAX_FILES) {
-        errors.push("최대 50개까지 추가할 수 있습니다.");
-        break;
+      const waiting = items.filter(
+        (item) => item.state === "needs-file" && item.name === file.name,
+      );
+      const replacement = waiting.length === 1 ? waiting[0] : undefined;
+      if (waiting.length > 1) {
+        errors.push(
+          `${file.name}: 같은 이름의 URL이 여러 개입니다. 해당 항목의 ‘저장한 파일 첨부’를 이용해 주세요.`,
+        );
+        continue;
       }
       try {
-        if (file.size > MAX_FILE_BYTES)
-          throw new Error("파일당 30 MB까지 지원합니다.");
-        if (sourceBytes() + file.size > MAX_TOTAL_BYTES)
-          throw new Error("전체 원본 용량은 200 MB까지 지원합니다.");
-        inspectImage(await file.arrayBuffer());
-        items.push(
-          newItem({
-            name: file.name,
-            source: file,
-            key,
-            preview: URL.createObjectURL(file),
-          }),
-        );
+        await validateFile(file);
+        if (replacement) {
+          attachFile(replacement, file);
+          restoredIds.add(replacement.id);
+        } else
+          items.push(
+            newItem({
+              name: file.name,
+              source: file,
+              key,
+              preview: URL.createObjectURL(file),
+            }),
+          );
       } catch (error) {
         errors.push(`${file.name}: ${error.message}`);
       }
@@ -178,6 +288,7 @@ async function addFiles(files) {
     invalidateBundle();
     render();
   }
+  if (restoredIds.size) await convert(restoredIds);
 }
 
 function addUrls() {
@@ -193,11 +304,6 @@ function addUrls() {
     }
     if (items.some((item) => item.url === entry.url)) {
       duplicates++;
-      continue;
-    }
-    if (items.length >= MAX_FILES) {
-      remaining.push(entry.url);
-      errors.push("최대 50개까지 추가할 수 있습니다.");
       continue;
     }
     items.push(newItem({ name: nameFromUrl(entry.url), url: entry.url }));
@@ -250,10 +356,12 @@ function downloadBundle() {
   link.remove();
 }
 
-async function convert() {
+async function convert(onlyIds) {
   if (busy || adding) return;
-  if ($("url-input").value.trim()) addUrls();
-  const pending = items.filter((item) => item.state === "queued");
+  if (!onlyIds && $("url-input").value.trim()) addUrls();
+  const pending = items.filter(
+    (item) => item.state === "queued" && (!onlyIds || onlyIds.has(item.id)),
+  );
   if (!pending.length) return;
   busy = true;
   controller = new AbortController();
@@ -282,10 +390,6 @@ async function convert() {
       try {
         if (!item.source) {
           const blob = await fetchImage(item.url, signal);
-          if (sourceBytes() + blob.size > MAX_TOTAL_BYTES)
-            throw new Error(
-              "전체 원본 용량은 200 MB까지 지원합니다. 목록을 나눠서 변환해 주세요.",
-            );
           inspectImage(await blob.arrayBuffer());
           item.source = blob;
           item.preview = URL.createObjectURL(blob);
@@ -302,13 +406,18 @@ async function convert() {
         }
         item.error =
           error.message || "변환 중 오류가 발생했습니다. 다시 시도해 주세요.";
-        item.state = "error";
+        item.state =
+          error instanceof RemoteImageAccessError ? "needs-file" : "error";
+        if (item.state === "needs-file") requestOriginalDownload(item);
       }
       $("progress").value = ++processed;
       render();
     }
     const successes = items.filter((item) => item.result).length;
     const failures = items.filter((item) => item.state === "error").length;
+    const awaitingFiles = items.filter(
+      (item) => item.state === "needs-file",
+    ).length;
     if (signal.aborted) {
       complete(
         `변환을 중지했습니다. 완료된 ${successes}개는 다운로드할 수 있고, 나머지는 다시 시작할 수 있습니다.`,
@@ -323,9 +432,13 @@ async function convert() {
       await buildBundle();
       const auto = $("auto-download").checked;
       complete(
-        `${successes}개 준비 완료${failures ? ` · ${failures}개는 확인이 필요합니다` : ""}. ${auto ? "자동 다운로드를 요청했습니다. 저장되지 않으면 다운로드 버튼을 눌러주세요." : "다운로드 버튼을 눌러 저장해 주세요."}`,
+        `${successes}개 준비 완료${failures ? ` · ${failures}개는 확인이 필요합니다` : ""}${awaitingFiles ? ` · ${awaitingFiles}개는 원본 저장 후 파일 첨부가 필요합니다` : ""}. ${auto ? "자동 다운로드를 요청했습니다. 저장되지 않으면 다운로드 버튼을 눌러주세요." : "다운로드 버튼을 눌러 저장해 주세요."}`,
       );
       if (auto) downloadBundle();
+    } else if (awaitingFiles) {
+      complete(
+        `${awaitingFiles}개 이미지의 원본 다운로드를 요청했습니다. 저장한 파일을 해당 항목에 첨부하면 변환을 자동으로 이어갑니다. 이미지가 새 탭에 열리거나 다운로드가 차단되면 아래 안내를 따라 주세요.${failures ? ` 다른 ${failures}개 항목은 오류를 확인해 주세요.` : ""}`,
+      );
     } else {
       complete("변환된 이미지가 없습니다. 각 항목의 안내를 확인해 주세요.");
     }
@@ -369,12 +482,10 @@ $("add-urls").addEventListener("click", addUrls);
 $("convert").addEventListener("click", () => void convert());
 $("cancel").addEventListener("click", () => controller?.abort());
 $("retry").addEventListener("click", () => {
-  items
-    .filter((item) => item.state === "error")
-    .forEach((item) => {
-      item.state = "queued";
-      item.error = "";
-    });
+  items.filter(retryable).forEach((item) => {
+    item.state = "queued";
+    item.error = "";
+  });
   void convert();
 });
 $("clear-all").addEventListener("click", () => {

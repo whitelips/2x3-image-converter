@@ -1,9 +1,3 @@
-export const MAX_FILES = 50;
-export const MAX_FILE_BYTES = 30 * 1024 * 1024;
-export const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
-export const MAX_PIXELS = 20_000_000;
-export const MAX_EDGE = 8192;
-
 export function fitToTwoThree(width, height) {
   if (
     !Number.isSafeInteger(width) ||
@@ -17,13 +11,10 @@ export function fitToTwoThree(width, height) {
   const targetWidth = unit * 2;
   const targetHeight = unit * 3;
   if (
-    targetWidth > MAX_EDGE ||
-    targetHeight > MAX_EDGE ||
-    targetWidth * targetHeight > MAX_PIXELS
+    !Number.isSafeInteger(targetWidth) ||
+    !Number.isSafeInteger(targetHeight)
   ) {
-    throw new Error(
-      "결과 이미지가 너무 큽니다. 결과 기준 2,000만 픽셀, 한 변 8,192px까지 지원합니다.",
-    );
+    throw new Error("이미지 크기를 정확히 계산할 수 없습니다.");
   }
   return {
     width: targetWidth,
@@ -163,11 +154,6 @@ export function inspectImage(buffer) {
     throw new Error(
       "이미지 정보를 읽을 수 없습니다. 파일이 손상되었는지 확인해 주세요.",
     );
-  if (width > MAX_EDGE || height > MAX_EDGE || width * height > MAX_PIXELS) {
-    throw new Error(
-      "원본 이미지가 너무 큽니다. 2,000만 픽셀, 한 변 8,192px까지 지원합니다.",
-    );
-  }
   return { format, width, height };
 }
 

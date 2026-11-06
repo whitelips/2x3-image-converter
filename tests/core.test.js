@@ -45,7 +45,13 @@ test("canvas contains the full original at an exact 2:3 ratio, including odd dim
     assert.ok(Math.abs(target.height - h - target.y * 2) <= 1);
   }
   assert.throws(() => fitToTwoThree(0, 100));
-  assert.throws(() => fitToTwoThree(10_000, 10));
+  assert.deepEqual(fitToTwoThree(10_000, 10), {
+    width: 10_000,
+    height: 15_000,
+    x: 0,
+    y: 7_495,
+  });
+  assert.throws(() => fitToTwoThree(Number.MAX_SAFE_INTEGER, 10));
 });
 
 test("URL parsing supports whitespace, preserves query commas, rejects credentials and executable schemes", () => {
@@ -68,7 +74,7 @@ test("safe filenames preserve JPEG extension and avoid case-insensitive ZIP coll
   );
 });
 
-test("image validation rejects HTML, animated PNG/WebP, oversized and truncated inputs", () => {
+test("image validation accepts large dimensions but rejects HTML, animation and truncated inputs", () => {
   assert.throws(() =>
     inspectImage(new TextEncoder().encode("<html>not an image</html>").buffer),
   );
@@ -95,6 +101,10 @@ test("image validation rejects HTML, animated PNG/WebP, oversized and truncated 
   webp[20] = 0;
   webp[24] = 255;
   webp[25] = 255;
-  assert.throws(() => inspectImage(webp.buffer), /너무 큽니다/);
+  assert.deepEqual(inspectImage(webp.buffer), {
+    format: "webp",
+    width: 65536,
+    height: 1,
+  });
   assert.throws(() => inspectImage(webp.slice(0, 24).buffer));
 });
